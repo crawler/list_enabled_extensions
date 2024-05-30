@@ -1,0 +1,105 @@
+#!/usr/bin/env ruby
+
+require 'optparse'
+require 'pathname'
+require_relative '../lib/database_reader'
+require_relative '../lib/workspace_storage_finder'
+
+class CommandLineInterface
+  def initialize
+    @options = {}
+    parse_options
+  end
+
+  def run
+    if db_path
+      read_specific_db
+    else
+      search_for_db
+    end
+  rescue WorkspaceStorageFinder::Error, DatabaseReader::Error => e
+    $stderr.puts e.message
+    exit 1
+  end
+
+  private
+
+  def parse_options
+    OptionParser.new do |opts|
+      opts.banner = 'Usage: find_workspace_hash [options] [workspace_path (default: current directory)]'
+
+      opts.on('--storage-path PATH', 'Path to the VSCode workspace storage (If not picked automatically or you changed it)') do |path|
+        @options[:workspaces_storage_path] = Pathname.new(path).expand_path
+      end
+
+      opts.on('--db-path PATH', 'Direct path of the state.vscdb file') do |path|
+        @options[:db_path] = Pathname.new(path).expand_path
+      end
+
+      opts.on('--sql-query SQL QUERY', "default: #{DatabaseReader.default_query}") do |path|
+        @options[:sql_query] = nil
+      end
+
+      opts.on_tail('-h', '--help', 'Show this message') do
+        puts opts
+        exit
+      end
+    end.parse!
+  end
+
+  def read_specific_db
+    print_extensions_maybe(db_reader: db_reader(path: db_path))
+  end
+
+  def search_for_db
+    storage_finder = WorkspaceStorageFinder.new(path: workspaces_storage_path)
+    print_extensions_maybe(db_reader: db_reader(path: storage_finder.find_path(needle: current_workspace_path).join('state.vscdb')))
+  end
+
+  def print_extensions_maybe(db_reader:)
+    extensions = db_reader.extensions
+    if extensions.any?
+      puts "\e[38;5;10mFOUND EXTENSIONS:\e[0m"
+      extensions.each do |extension|
+        puts "#{extension}"
+      end
+    else
+      $stderr.puts "No extensions found in the database file '#{db_reader.path}'  ❌"
+      exit 1
+    end
+  end
+
+  def db_reader(path: db_path)
+    DatabaseReader.new(path:)
+  end
+
+  def db_path
+    @options[:db_path]
+  end
+
+  def current_workspace_path
+    @current_workspace_path ||= Pathname.new(ARGV[0] || Dir.pwd).expand_path
+  end
+
+  def workspaces_storage_path
+    @workspaces_storage_path ||= self.class.possible_workspaces_storage_path
+  end
+
+  class << self
+    def possible_workspaces_storage_path
+      case RbConfig::CONFIG['host_os']
+      when /mswin|msys|mingw|cygwin|bccwin|wince|emc/
+        Pathname.new(ENV.fetch('APPDATA') { raise 'APPDATA environment variable not set.' })
+      when /darwin|mac os/
+        Pathname.new(Dir.home) + 'Library/Application Support'
+      when /linux|solaris|bsd/
+        Pathname.new(Dir.home) + '.config'
+      else
+        raise 'Unsupported OS'
+      end.join('Code/User/workspaceStorage')
+    end
+  end
+end
+
+# Run the script
+CommandLineInterface.new.run

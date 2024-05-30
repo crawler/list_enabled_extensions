@@ -1,0 +1,4 @@
+#!/usr/bin/env ruby
+require 'pathname'
+
+load Pathname.new(__dir__).join('list_enabled_extensions').to_s
